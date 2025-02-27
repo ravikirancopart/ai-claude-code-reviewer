@@ -9,8 +9,6 @@ A GitHub Action that automatically reviews pull requests using Anthropic's Claud
 - Review your PRs using Anthropic's Claude API
 - Give use comments and suggestions to improve the source codes
 
-![Demo](./Demo.png)
-
 ## Setup
 
 1. To use this GitHub Action, you need an Anthropic API key. If you don't have one, sign up for an API key
