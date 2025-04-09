@@ -527,30 +527,63 @@ def create_review_comment(
         pr = repo_obj.get_pull(pull_number)
         debug_log(f"Successfully retrieved PR: {pr.title}")
         
-        # Instead of submitting all comments at once, add them individually
-        # This is more reliable than batch submission
-        successful_comments = 0
-        failed_comments = 0
-        
-        for comment in comments:
-            try:
-                # Create a comment directly instead of a review with multiple comments
-                comment_response = pr.create_issue_comment(
-                    body=f"**Review for {comment['path']}:{comment.get('line', 'N/A')}**\n\n{comment['body']}"
-                )
-                debug_log(f"Successfully created comment: {comment_response.id}")
-                successful_comments += 1
-            except Exception as comment_error:
-                debug_log(f"Failed to create comment: {str(comment_error)}")
-                failed_comments += 1
-        
-        print(f"Successfully created {successful_comments} comments ({failed_comments} failed)")
-        
-        if failed_comments > 0 and successful_comments == 0:
-            # If all comments failed, raise an exception
-            raise Exception(f"All {failed_comments} comments failed to post")
+        # Method 1: Try to create a single issue comment with all reviews
+        try:
+            debug_log("Using method 1: Creating a single issue comment with all reviews")
             
-        return successful_comments
+            # Format all reviews into a single comment
+            comment_body = "# Claude Code Review Results\n\n"
+            
+            for i, comment in enumerate(comments):
+                comment_body += f"## Review {i+1}: {comment['path']}:{comment.get('line', 'N/A')}\n\n"
+                comment_body += f"{comment['body']}\n\n"
+                comment_body += "---\n\n"
+            
+            # Create the comment
+            issue_comment = pr.create_issue_comment(comment_body)
+            print(f"Successfully created issue comment with ID: {issue_comment.id}")
+            return issue_comment.id
+            
+        except Exception as e1:
+            debug_log(f"Method 1 failed: {str(e1)}")
+            
+            # Method 2: Try to create individual issue comments
+            debug_log("Using method 2: Creating individual issue comments")
+            
+            successful_comments = 0
+            failed_comments = 0
+            
+            for comment in comments:
+                try:
+                    # Create a comment directly instead of a review with multiple comments
+                    comment_response = pr.create_issue_comment(
+                        body=f"**Review for {comment['path']}:{comment.get('line', 'N/A')}**\n\n{comment['body']}"
+                    )
+                    debug_log(f"Successfully created comment: {comment_response.id}")
+                    successful_comments += 1
+                except Exception as comment_error:
+                    debug_log(f"Failed to create comment: {str(comment_error)}")
+                    failed_comments += 1
+            
+            if successful_comments > 0:
+                print(f"Successfully created {successful_comments} comments ({failed_comments} failed)")
+                return successful_comments
+            
+            # Method 3: Last resort - just create a simple comment
+            debug_log("Using method 3: Creating a simple issue comment")
+            
+            try:
+                fallback_comment = pr.create_issue_comment(
+                    "Claude found issues in the code but could not post detailed comments. " +
+                    "Please check the action logs for details."
+                )
+                print(f"Created fallback comment with ID: {fallback_comment.id}")
+                # Still raise an exception to mark the action as failed
+                raise Exception(f"Could not create detailed comments: {str(e1)}")
+            except Exception as e3:
+                debug_log(f"Method 3 failed: {str(e3)}")
+                # Re-raise the original exception
+                raise Exception(f"All methods failed to create comments: {str(e1)}")
 
     except Exception as e:
         print(f"ERROR: Failed to create review: {str(e)}")
