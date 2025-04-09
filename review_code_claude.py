@@ -444,21 +444,19 @@ def create_comment(file: File, chunk: Chunk, ai_responses: List[Dict[str, str]])
             
             # GitHub expects paths without 'a/' or 'b/' prefixes
             path = file.to_file
-            if path.startswith('a/') or path.startswith('b/'):
+            if path.startswith('a/'):
                 path = path[2:]
-                debug_log(f"Removed prefix from path: {path}")
+                debug_log(f"Removed a/ prefix from path: {path}")
+            elif path.startswith('b/'):
+                path = path[2:]
+                debug_log(f"Removed b/ prefix from path: {path}")
             
-            # Use the diff_position for GitHub's PR review API
-            if change.diff_position is None:
-                debug_log(f"Warning: No diff position for line {line_number}")
-                continue
-                
             comment = {
                 "body": ai_response["reviewComment"],
                 "path": path,
-                "position": change.diff_position
+                "line": line_number,  # This is more reliable than position
             }
-            debug_log(f"Created comment for {path} at diff position {change.diff_position} (file line {line_number})")
+            debug_log(f"Created comment for {path} at line {line_number}")
             comments.append(comment)
 
         except (KeyError, TypeError, ValueError) as e:
@@ -499,7 +497,7 @@ def analyze_code(parsed_diff: List[File], pr_details: PRDetails) -> List[Dict[st
     if len(comments) > 0:
         debug_log("Sample of comments:")
         for i, comment in enumerate(comments[:3]):  # Show first 3 comments
-            debug_log(f"Comment {i+1}: {comment['path']}:{comment['position']} - {comment['body'][:50]}...")
+            debug_log(f"Comment {i+1}: {comment['path']}:{comment['line']} - {comment['body'][:50]}...")
     
     return comments
 
@@ -518,7 +516,7 @@ def create_review_comment(
         
     # Print details of the first few comments for debugging
     for i, comment in enumerate(comments[:3]):
-        print(f"Comment {i+1}: {comment['path']}:{comment['position']} - {comment['body'][:50]}...")
+        print(f"Comment {i+1}: {comment['path']}:{comment.get('line', 'N/A')} - {comment['body'][:50]}...")
         
     print(f"Comments details: {json.dumps(comments, indent=2)}")
 
@@ -529,43 +527,30 @@ def create_review_comment(
         pr = repo_obj.get_pull(pull_number)
         debug_log(f"Successfully retrieved PR: {pr.title}")
         
-        # Get the latest commit in the PR
-        commits = list(pr.get_commits())
-        if not commits:
-            print("ERROR: No commits found in the PR")
-            raise Exception("No commits found in the PR")
-            
-        latest_commit = commits[-1]
-        debug_log(f"Latest commit in PR: {latest_commit.sha}")
+        # Instead of submitting all comments at once, add them individually
+        # This is more reliable than batch submission
+        successful_comments = 0
+        failed_comments = 0
         
-        debug_log("Creating review with comments...")
+        for comment in comments:
+            try:
+                # Create a comment directly instead of a review with multiple comments
+                comment_response = pr.create_issue_comment(
+                    body=f"**Review for {comment['path']}:{comment.get('line', 'N/A')}**\n\n{comment['body']}"
+                )
+                debug_log(f"Successfully created comment: {comment_response.id}")
+                successful_comments += 1
+            except Exception as comment_error:
+                debug_log(f"Failed to create comment: {str(comment_error)}")
+                failed_comments += 1
         
-        # Create the review with all required fields
-        review = pr.create_review(
-            body="Claude Code Reviewer Comments",
-            event="COMMENT",
-            comments=comments,
-            commit_id=latest_commit.sha  # This is crucial - specify which commit to comment on
-        )
-        print(f"Review created successfully with ID: {review.id}")
+        print(f"Successfully created {successful_comments} comments ({failed_comments} failed)")
         
-        # Verify the comments were posted by checking review comments
-        try:
-            # Give GitHub a moment to process
-            import time
-            time.sleep(2)
+        if failed_comments > 0 and successful_comments == 0:
+            # If all comments failed, raise an exception
+            raise Exception(f"All {failed_comments} comments failed to post")
             
-            review_comments = list(pr.get_comments())
-            debug_log(f"PR now has {len(review_comments)} review comments")
-            
-            if len(review_comments) > 0:
-                debug_log("Most recent comments:")
-                for comment in review_comments[-min(3, len(review_comments)):]:
-                    debug_log(f"- {comment.path}:{comment.position} - {comment.body[:50]}")
-        except Exception as e:
-            debug_log(f"Note: Could not verify comments were posted: {str(e)}")
-            
-        return review.id
+        return successful_comments
 
     except Exception as e:
         print(f"ERROR: Failed to create review: {str(e)}")
