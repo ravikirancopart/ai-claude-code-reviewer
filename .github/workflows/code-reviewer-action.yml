@@ -42,6 +42,12 @@ jobs:
           INPUT_EXCLUDE: "*.md,*.txt,package-lock.json,*.yml,*.yaml"
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           DEBUG: "true"
+          # Confluence integration for auto-refreshing guidelines
+          JIRA_USERNAME: ${{ secrets.JIRA_USERNAME }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          CONFLUENCE_URL: ${{ secrets.CONFLUENCE_URL }}
+          # Configure guidelines refresh interval (days)
+          REFRESH_INTERVAL_DAYS: "7"
         run: |
           python review_code_claude.py
 

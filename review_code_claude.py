@@ -791,7 +791,8 @@ def main():
         # First, check and update guidelines if needed
         guidelines_manager = GuidelinesManager()
         guidelines_exist = guidelines_manager.guidelines_exist()
-        
+
+        # If guidelines don't exist, try to fetch from Confluence
         if not guidelines_exist:
             debug_log("No guidelines file found, attempting to fetch from Confluence...")
             guidelines_updated = guidelines_manager.update_guidelines()
@@ -801,11 +802,14 @@ def main():
             else:
                 debug_log("Failed to fetch guidelines from Confluence")
         else:
-            # Guidelines exist, check if they need updating
+            # Guidelines exist, check if they need updating based on timestamp
             if guidelines_manager.needs_refresh():
-                debug_log("Guidelines exist but need refresh, attempting to update...")
-                guidelines_manager.update_guidelines()
-                # Continue with existing file if update fails
+                debug_log(f"Guidelines are older than {guidelines_manager.refresh_interval_days} days, attempting to update...")
+                guidelines_updated = guidelines_manager.update_guidelines()
+                if guidelines_updated:
+                    debug_log("Successfully refreshed guidelines from Confluence")
+                else:
+                    debug_log("Failed to refresh guidelines, will use existing file")
         
         # Initialize guidelines store - only if guidelines exist
         has_guidelines = guidelines_manager.guidelines_exist()
