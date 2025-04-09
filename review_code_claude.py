@@ -497,38 +497,29 @@ def analyze_code(parsed_diff: List[File], pr_details: PRDetails) -> List[Dict[st
     if len(comments) > 0:
         debug_log("Sample of comments:")
         for i, comment in enumerate(comments[:3]):  # Show first 3 comments
-            debug_log(f"Comment {i+1}: {comment['path']}:{comment['line']} - {comment['body'][:50]}...")
+            debug_log(f"Comment {i+1}: {comment['path']}:{comment.get('line', 'N/A')} - {comment['body'][:50]}...")
     
     return comments
 
-def create_review_comment(
+def post_comments_to_pr(
     owner: str,
     repo: str,
     pull_number: int,
     comments: List[Dict[str, Any]],
 ):
-    """Submits the review comments to the GitHub API."""
-    print(f"Attempting to create {len(comments)} review comments")
+    """Posts comments to the PR as a single issue comment."""
+    print(f"Posting {len(comments)} review comments to PR")
     
     if not comments:
-        print("WARNING: No comments to post, skipping review creation")
+        print("WARNING: No comments to post, skipping")
         return
         
-    # Print details of the first few comments for debugging
-    for i, comment in enumerate(comments[:3]):
-        print(f"Comment {i+1}: {comment['path']}:{comment.get('line', 'N/A')} - {comment['body'][:50]}...")
-        
-    print(f"Comments details: {json.dumps(comments, indent=2)}")
-
     try:
         debug_log(f"Getting repo object for {owner}/{repo}...")
         repo_obj = gh.get_repo(f"{owner}/{repo}")
         debug_log(f"Getting PR #{pull_number}...")
         pr = repo_obj.get_pull(pull_number)
         debug_log(f"Successfully retrieved PR: {pr.title}")
-        
-        # Method 1: Always skip PR review API and use issue comments instead
-        debug_log("Using method 1: Creating a single issue comment with all reviews")
         
         # Format all reviews into a single comment
         comment_body = "# Claude Code Review Results\n\n"
@@ -557,14 +548,12 @@ def create_review_comment(
         # Create the comment
         issue_comment = pr.create_issue_comment(comment_body)
         print(f"Successfully created consolidated issue comment with ID: {issue_comment.id}")
-        debug_log("Successfully created review comments as a single issue comment")
+        debug_log("Successfully posted review as a single issue comment")
         return issue_comment.id
         
     except Exception as e:
-        print(f"ERROR: Failed to create review: {str(e)}")
+        print(f"ERROR: Failed to post review comment: {str(e)}")
         print(f"Error type: {type(e)}")
-        print(f"Comments payload: {json.dumps(comments, indent=2)}")
-        print(f"GitHub token first 4 chars: {GITHUB_TOKEN[:4]}...")
         
         # Try fallback method - create a simple comment
         try:
@@ -580,6 +569,69 @@ def create_review_comment(
             debug_log(f"Fallback method failed: {str(e2)}")
             # Re-raise the original exception
             raise Exception(f"All methods failed to create comments: {str(e)}")
+
+def create_review_comment_deprecated(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    comments: List[Dict[str, Any]],
+):
+    """DEPRECATED: Do not use this function as it triggers GitHub API 422 errors.
+    Use post_comments_to_pr instead, which uses issue comments."""
+    print("WARNING: Using deprecated create_review_comment function")
+    print("Please update code to use post_comments_to_pr instead")
+    
+    # Add detailed debugging to understand the 422 error
+    print("\n=== DEBUG INFORMATION FOR 422 ERRORS ===")
+    print(f"Number of comments being sent: {len(comments)}")
+    for i, comment in enumerate(comments[:5]):  # Show first 5 comments for debugging
+        print(f"\nComment {i+1} details:")
+        print(f"  Path: '{comment.get('path', 'None')}'")
+        print(f"  Position: {comment.get('position', 'None')}")
+        print(f"  Line: {comment.get('line', 'None')}")
+        print(f"  Body length: {len(comment.get('body', ''))}")
+        print(f"  Body preview: {comment.get('body', '')[:50]}...")
+    
+    # Show the complete payload that would be sent to GitHub
+    try:
+        import requests
+        import json
+        from github import GithubObject
+        
+        # Get the repository
+        gh = Github(os.environ["GITHUB_TOKEN"])
+        repo_obj = gh.get_repo(f"{owner}/{repo}")
+        pr = repo_obj.get_pull(pull_number)
+        
+        # Construct the payload manually to see what's being sent
+        payload = {
+            "body": "Review comments",
+            "event": "COMMENT",
+            "comments": []
+        }
+        
+        for comment in comments:
+            # Convert to the format that PyGithub would send
+            comment_dict = {}
+            for key, value in comment.items():
+                if value is not None and value != GithubObject.NotSet:
+                    comment_dict[key] = value
+            payload["comments"].append(comment_dict)
+        
+        print("\nFull payload that would be sent to GitHub:")
+        print(json.dumps(payload, indent=2))
+        
+        # Get the API endpoint for reference
+        api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/reviews"
+        print(f"\nAPI endpoint: {api_url}")
+        
+    except Exception as e:
+        print(f"Error constructing debug payload: {e}")
+    
+    print("=== END DEBUG INFORMATION ===\n")
+    
+    # Forward call to the correct function
+    return post_comments_to_pr(owner, repo, pull_number, comments)
 
 def main():
     """Main function to execute the code review process."""
@@ -637,12 +689,13 @@ def main():
         
         if comments:
             try:
-                review_id = create_review_comment(
+                # Use the new post_comments_to_pr function instead of create_review_comment
+                post_id = post_comments_to_pr(
                     pr_details.owner, pr_details.repo, pr_details.pull_number, comments
                 )
-                print(f"Successfully created review with ID: {review_id}")
+                print(f"Successfully posted review with ID: {post_id}")
             except Exception as e:
-                print(f"ERROR: Failed to create review comments: {str(e)}")
+                print(f"ERROR: Failed to post comments: {str(e)}")
                 sys.exit(1)  # Exit with error code
         else:
             print("No issues found, no comments to post")
