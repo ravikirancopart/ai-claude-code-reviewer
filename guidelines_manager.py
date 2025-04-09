@@ -1,6 +1,6 @@
 import os
 import requests
-import datetime
+from datetime import datetime
 import re
 from typing import Optional
 import logging

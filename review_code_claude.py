@@ -10,6 +10,7 @@ import fnmatch
 import re
 from unidiff import Hunk, PatchedFile, PatchSet
 from embeddings_store import GuidelinesStore
+from guidelines_manager import GuidelinesManager
 # from dotenv import load_dotenv // for local env only
 
 # Load environment variables from .env file
@@ -17,6 +18,9 @@ from embeddings_store import GuidelinesStore
 
 # Set DEBUG to true to get more verbose logging
 DEBUG = os.environ.get('DEBUG', 'true').lower() == 'true'
+
+# Initialize global guidelines store
+guidelines_store = None
 
 def debug_log(message):
     if DEBUG:
@@ -54,16 +58,6 @@ try:
     debug_log("Anthropic client initialized successfully")
 except Exception as e:
     print(f"ERROR: Failed to initialize Anthropic client: {str(e)}")
-    sys.exit(1)
-
-# Initialize guidelines store
-try:
-    debug_log("Initializing guidelines store...")
-    guidelines_store = GuidelinesStore()
-    guidelines_store.initialize_from_markdown('coding_guidelines.md')
-    debug_log("Guidelines store initialized successfully")
-except Exception as e:
-    print(f"ERROR: Failed to initialize guidelines store: {str(e)}")
     sys.exit(1)
 
 class PRDetails:
@@ -785,6 +779,28 @@ def main():
         debug_log(f"Python version: {sys.version}")
         debug_log(f"Current directory: {os.getcwd()}")
         debug_log(f"Environment variables: {[k for k in os.environ.keys() if not k.startswith('_')]}")
+        
+        # First, check and update guidelines if needed
+        guidelines_manager = GuidelinesManager()
+        guidelines_updated = guidelines_manager.check_and_update_if_needed()
+        
+        if not guidelines_updated:
+            print("WARNING: Could not update guidelines from Confluence. Using existing guidelines if available.")
+            if not guidelines_manager.guidelines_exist():
+                print("ERROR: No guidelines file exists and could not fetch from Confluence.")
+                print("Please ensure the coding_guidelines.md file exists or set the CONFLUENCE_URL, JIRA_USERNAME, and JIRA_API_TOKEN environment variables.")
+                sys.exit(1)
+        
+        # Initialize guidelines store
+        try:
+            debug_log("Initializing guidelines store...")
+            global guidelines_store
+            guidelines_store = GuidelinesStore()
+            guidelines_store.initialize_from_markdown('coding_guidelines.md')
+            debug_log("Guidelines store initialized successfully")
+        except Exception as e:
+            print(f"ERROR: Failed to initialize guidelines store: {str(e)}")
+            sys.exit(1)
         
         pr_details = get_pr_details()
         debug_log(f"Got PR details: {pr_details.__dict__}")
