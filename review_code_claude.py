@@ -176,6 +176,7 @@ class Change:
     def __init__(self, content="", line_number=None):
         self.content = content
         self.line_number = line_number  # Line number in the target file
+        self.diff_position = None  # Position within the diff file (for GitHub PR review API)
 
 class File:
     """Represents a file in a diff."""
@@ -226,14 +227,18 @@ def parse_diff(diff_text: str) -> List[File]:
                 
                 # Parse the hunk header to get target line numbers
                 # Format: @@ -a,b +c,d @@
-                match = re.match(r'@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@', line)
+                match = re.match(r'@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@', line)
                 if match:
-                    target_line_number = int(match.group(1))
-                    current_chunk.target_start = target_line_number
-                    debug_log(f"New chunk starting at line {target_line_number}: {line}")
+                    source_start = int(match.group(1))
+                    target_start = int(match.group(2))
+                    current_chunk.source_start = source_start
+                    current_chunk.target_start = target_start
+                    target_line_number = target_start
+                    debug_log(f"New chunk starting at line {target_line_number} (source line {source_start}): {line}")
                 else:
                     target_line_number = 1  # Default if we can't parse
                     current_chunk.target_start = 1
+                    current_chunk.source_start = 1
                     debug_log(f"Warning: Could not parse line numbers from hunk header: {line}")
                     
                 continue
@@ -241,13 +246,14 @@ def parse_diff(diff_text: str) -> List[File]:
             if current_chunk:
                 current_chunk.content += "\n" + line
                 
-                # For context lines (unchanged) and added lines, track line numbers
+                # Store the change with its position in the file and in the diff
                 if line.startswith(" ") or line.startswith("+"):
+                    # Both context and added lines increment the target file line number
                     change = Change(content=line, line_number=target_line_number)
                     current_chunk.changes.append(change)
                     target_line_number += 1
                 elif line.startswith("-"):
-                    # For removed lines, no target line number
+                    # Removed lines don't affect target file line numbers
                     change = Change(content=line)
                     current_chunk.changes.append(change)
         
@@ -256,6 +262,25 @@ def parse_diff(diff_text: str) -> List[File]:
             if current_chunk:
                 current_file.chunks.append(current_chunk)
             files.append(current_file)
+        
+        # Calculate positions for GitHub's PR review API
+        # GitHub needs position to be relative to the start of the diff
+        for file in files:
+            position_counter = 0
+            for chunk in file.chunks:
+                # The hunk header line counts as position 1
+                position_counter += 1
+                
+                for i, change in enumerate(chunk.changes):
+                    # Each change's position is its index in the entire diff file
+                    position_counter += 1
+                    # Store the position for later use
+                    change.diff_position = position_counter
+                    
+                    # Debug information for the first few and last few changes
+                    if i < 3 or i >= len(chunk.changes) - 3:
+                        line_str = f"line {change.line_number}" if change.line_number else "removed line"
+                        debug_log(f"Change {i} at position {position_counter} ({line_str}): {change.content[:30]}")
         
         debug_log(f"Diff parsing complete. Found {len(files)} files.")
         for file in files:
@@ -392,12 +417,12 @@ def create_comment(file: File, chunk: Chunk, ai_responses: List[Dict[str, str]])
     line_map = {}
     for change in chunk.changes:
         if change.line_number is not None:
-            line_map[change.line_number] = change.content
+            line_map[change.line_number] = change
     
     # Debug info for line map
     debug_log("\nLine map:")
-    for line_num, content in sorted(line_map.items()):
-        debug_log(f"Line {line_num}: {content}")
+    for line_num, change in sorted(line_map.items()):
+        debug_log(f"Line {line_num}: {change.content}")
     
     for ai_response in ai_responses:
         try:
@@ -409,18 +434,31 @@ def create_comment(file: File, chunk: Chunk, ai_responses: List[Dict[str, str]])
                 debug_log(f"Warning: Line {line_number} not found in the diff")
                 continue
                 
+            # Get the change for this line
+            change = line_map[line_number]
+            
             # Ensure the line is an added line (starts with +)
-            content = line_map[line_number]
-            if not content.startswith("+"):
-                debug_log(f"Warning: Line {line_number} is not an added line: {content}")
+            if not change.content.startswith("+"):
+                debug_log(f"Warning: Line {line_number} is not an added line: {change.content}")
                 continue
             
+            # GitHub expects paths without 'a/' or 'b/' prefixes
+            path = file.to_file
+            if path.startswith('a/') or path.startswith('b/'):
+                path = path[2:]
+                debug_log(f"Removed prefix from path: {path}")
+            
+            # Use the diff_position for GitHub's PR review API
+            if change.diff_position is None:
+                debug_log(f"Warning: No diff position for line {line_number}")
+                continue
+                
             comment = {
                 "body": ai_response["reviewComment"],
-                "path": file.to_file,
-                "position": line_number
+                "path": path,
+                "position": change.diff_position
             }
-            debug_log(f"Created comment for {file.to_file}:{line_number}")
+            debug_log(f"Created comment for {path} at diff position {change.diff_position} (file line {line_number})")
             comments.append(comment)
 
         except (KeyError, TypeError, ValueError) as e:
@@ -491,15 +529,42 @@ def create_review_comment(
         pr = repo_obj.get_pull(pull_number)
         debug_log(f"Successfully retrieved PR: {pr.title}")
         
+        # Get the latest commit in the PR
+        commits = list(pr.get_commits())
+        if not commits:
+            print("ERROR: No commits found in the PR")
+            raise Exception("No commits found in the PR")
+            
+        latest_commit = commits[-1]
+        debug_log(f"Latest commit in PR: {latest_commit.sha}")
+        
         debug_log("Creating review with comments...")
         
-        # Create the review with only the required fields
+        # Create the review with all required fields
         review = pr.create_review(
             body="Claude Code Reviewer Comments",
+            event="COMMENT",
             comments=comments,
-            event="COMMENT"
+            commit_id=latest_commit.sha  # This is crucial - specify which commit to comment on
         )
         print(f"Review created successfully with ID: {review.id}")
+        
+        # Verify the comments were posted by checking review comments
+        try:
+            # Give GitHub a moment to process
+            import time
+            time.sleep(2)
+            
+            review_comments = list(pr.get_comments())
+            debug_log(f"PR now has {len(review_comments)} review comments")
+            
+            if len(review_comments) > 0:
+                debug_log("Most recent comments:")
+                for comment in review_comments[-min(3, len(review_comments)):]:
+                    debug_log(f"- {comment.path}:{comment.position} - {comment.body[:50]}")
+        except Exception as e:
+            debug_log(f"Note: Could not verify comments were posted: {str(e)}")
+            
         return review.id
 
     except Exception as e:
