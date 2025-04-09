@@ -413,6 +413,8 @@ def create_comment(file: File, chunk: Chunk, ai_responses: List[Dict[str, str]])
     
     debug_log(f"Creating comments for {len(ai_responses)} AI responses")
     
+    
+    
     # Create a lookup of line numbers to changes
     line_map = {}
     for change in chunk.changes:
@@ -437,6 +439,8 @@ def create_comment(file: File, chunk: Chunk, ai_responses: List[Dict[str, str]])
             # Get the change for this line
             change = line_map[line_number]
             
+            debug_log('@@@@TEST', change)
+            
             # Ensure the line is an added line (starts with +)
             if not change.content.startswith("+"):
                 debug_log(f"Warning: Line {line_number} is not an added line: {change.content}")
@@ -444,6 +448,7 @@ def create_comment(file: File, chunk: Chunk, ai_responses: List[Dict[str, str]])
             
             # GitHub expects paths without 'a/' or 'b/' prefixes
             path = file.to_file
+            debug_log('@@@@TEST', path)
             if path.startswith('a/'):
                 path = path[2:]
                 debug_log(f"Removed a/ prefix from path: {path}")
@@ -456,8 +461,11 @@ def create_comment(file: File, chunk: Chunk, ai_responses: List[Dict[str, str]])
                 "path": path,
                 "line": line_number,  # This is more reliable than position
             }
+            
+            debug_log("@@@@TEST", comment)
             debug_log(f"Created comment for {path} at line {line_number}")
             comments.append(comment)
+            debug_log('@@@@TEST', comments)
 
         except (KeyError, TypeError, ValueError) as e:
             debug_log(f"Error creating comment from AI response: {e}, Response: {ai_response}")
