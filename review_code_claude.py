@@ -194,56 +194,94 @@ def parse_diff(diff_text: str) -> List[File]:
     
     debug_log("Starting to parse diff...")
     try:
-        for line in diff_text.splitlines():
+        lines = diff_text.splitlines()
+        line_index = 0
+        in_binary_file = False
+        
+        while line_index < len(lines):
+            line = lines[line_index]
+            
+            # Skip binary file content
+            if line.startswith("Binary files") or line.startswith("GIT binary patch"):
+                in_binary_file = True
+                debug_log(f"Skipping binary file content: {line}")
+                line_index += 1
+                continue
+                
+            # Reset binary file flag on diff line
+            if line.startswith("diff --git"):
+                in_binary_file = False
+                
             # Starting a new file
             if line.startswith("diff --git"):
+                # Finish previous file if there was one
                 if current_file:
+                    if current_chunk:
+                        current_file.chunks.append(current_chunk)
+                        current_chunk = None
                     files.append(current_file)
+                    debug_log(f"Added file to list: {current_file.to_file} with {len(current_file.chunks)} chunks")
+                
                 current_file = File()
                 debug_log(f"New file found: {line}")
-                continue
                 
-            if not current_file:
-                continue
-                
+                # Try to extract file names from diff line
+                # Format: diff --git a/file.ext b/file.ext
+                parts = line.split()
+                if len(parts) >= 3:
+                    try:
+                        # The a/file path is typically at index 2
+                        if parts[2].startswith('a/'):
+                            current_file.from_file = parts[2]
+                            debug_log(f"Extracted from_file from diff line: {current_file.from_file}")
+                        # The b/file path is typically at index 3
+                        if len(parts) > 3 and parts[3].startswith('b/'):
+                            current_file.to_file = parts[3]
+                            debug_log(f"Extracted to_file from diff line: {current_file.to_file}")
+                    except Exception as e:
+                        debug_log(f"Error extracting file names from diff line: {e}")
+            
             # Get file names
-            if line.startswith("--- "):
-                current_file.from_file = line[4:].strip()
-                debug_log(f"From file: {current_file.from_file}")
-                continue
-                
-            if line.startswith("+++ "):
-                current_file.to_file = line[4:].strip()
-                debug_log(f"To file: {current_file.to_file}")
-                continue
-                
+            elif line.startswith("--- "):
+                if current_file:
+                    current_file.from_file = line[4:].strip()
+                    debug_log(f"From file: {current_file.from_file}")
+            
+            elif line.startswith("+++ "):
+                if current_file:
+                    current_file.to_file = line[4:].strip()
+                    debug_log(f"To file: {current_file.to_file}")
+            
             # Start of a chunk/hunk
-            if line.startswith("@@"):
-                if current_chunk:
-                    current_file.chunks.append(current_chunk)
+            elif line.startswith("@@") and not in_binary_file:
+                # Only process chunk headers after we have a current file
+                if current_file:
+                    # Save previous chunk if exists
+                    if current_chunk:
+                        current_file.chunks.append(current_chunk)
+                        debug_log(f"Added chunk to file {current_file.to_file}")
                     
-                current_chunk = Chunk()
-                current_chunk.content = line
-                
-                # Parse the hunk header to get target line numbers
-                # Format: @@ -a,b +c,d @@
-                match = re.match(r'@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@', line)
-                if match:
-                    source_start = int(match.group(1))
-                    target_start = int(match.group(2))
-                    current_chunk.source_start = source_start
-                    current_chunk.target_start = target_start
-                    target_line_number = target_start
-                    debug_log(f"New chunk starting at line {target_line_number} (source line {source_start}): {line}")
-                else:
-                    target_line_number = 1  # Default if we can't parse
-                    current_chunk.target_start = 1
-                    current_chunk.source_start = 1
-                    debug_log(f"Warning: Could not parse line numbers from hunk header: {line}")
+                    current_chunk = Chunk()
+                    current_chunk.content = line
                     
-                continue
-                
-            if current_chunk:
+                    # Parse the hunk header to get target line numbers
+                    # Format: @@ -a,b +c,d @@
+                    match = re.match(r'@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@', line)
+                    if match:
+                        source_start = int(match.group(1))
+                        target_start = int(match.group(2))
+                        current_chunk.source_start = source_start
+                        current_chunk.target_start = target_start
+                        target_line_number = target_start
+                        debug_log(f"New chunk starting at line {target_line_number} (source line {source_start}): {line}")
+                    else:
+                        target_line_number = 1  # Default if we can't parse
+                        current_chunk.target_start = 1
+                        current_chunk.source_start = 1
+                        debug_log(f"Warning: Could not parse line numbers from hunk header: {line}")
+            
+            # Process content lines only if we have a current chunk and not in a binary file
+            elif current_chunk and current_file and not in_binary_file:
                 current_chunk.content += "\n" + line
                 
                 # Store the change with its position in the file and in the diff
@@ -256,20 +294,30 @@ def parse_diff(diff_text: str) -> List[File]:
                     # Removed lines don't affect target file line numbers
                     change = Change(content=line)
                     current_chunk.changes.append(change)
+            
+            line_index += 1
         
         # Add the last file and chunk if any
         if current_file:
             if current_chunk:
                 current_file.chunks.append(current_chunk)
+                debug_log(f"Added final chunk to file {current_file.to_file}")
             files.append(current_file)
+            debug_log(f"Added final file to list: {current_file.to_file} with {len(current_file.chunks)} chunks")
+        
+        # Clean up any files that don't have proper path information
+        files = [f for f in files if f.to_file]
         
         # Calculate positions for GitHub's PR review API
         # GitHub needs position to be relative to the start of the diff
         for file in files:
             position_counter = 0
-            for chunk in file.chunks:
+            debug_log(f"Processing file for positions: {file.to_file} with {len(file.chunks)} chunks")
+            
+            for chunk_index, chunk in enumerate(file.chunks):
                 # The hunk header line counts as position 1
                 position_counter += 1
+                debug_log(f"Processing chunk {chunk_index+1}/{len(file.chunks)} with {len(chunk.changes)} changes")
                 
                 for i, change in enumerate(chunk.changes):
                     # Each change's position is its index in the entire diff file
@@ -284,21 +332,47 @@ def parse_diff(diff_text: str) -> List[File]:
         
         debug_log(f"Diff parsing complete. Found {len(files)} files.")
         for file in files:
-            debug_log(f"File: {file.to_file} with {len(file.chunks)} chunks")
+            normalized_path = normalize_file_path(file.to_file)
+            debug_log(f"File: {normalized_path} with {len(file.chunks)} chunks")
             
         return files
     except Exception as e:
         print(f"ERROR: Failed to parse diff: {str(e)}")
         raise
 
+def normalize_file_path(path: str) -> str:
+    """Normalizes a file path from a git diff.
+    
+    Removes 'a/' or 'b/' prefixes and handles /dev/null paths.
+    
+    Args:
+        path (str): The file path to normalize.
+        
+    Returns:
+        str: The normalized file path.
+    """
+    if not path or path == "/dev/null":
+        return path
+        
+    # Remove 'a/' or 'b/' prefixes
+    if path.startswith('a/'):
+        path = path[2:]
+    elif path.startswith('b/'):
+        path = path[2:]
+        
+    return path
+
 def create_prompt(file: File, chunk: Chunk, pr_details: PRDetails) -> str:
     """Creates a prompt for Claude to review the code."""
     try:
+        # Normalize file path for consistent handling
+        normalized_path = normalize_file_path(file.to_file)
+        
         # Get relevant guidelines based on the code being reviewed
-        debug_log(f"Getting relevant guidelines for {file.to_file}...")
+        debug_log(f"Getting relevant guidelines for {normalized_path}...")
         relevant_guidelines = guidelines_store.get_relevant_guidelines(
             code_snippet=chunk.content,
-            file_path=file.to_file
+            file_path=normalized_path
         )
         
         guidelines_text = "\n".join(relevant_guidelines)
@@ -326,7 +400,7 @@ Here are the relevant coding guidelines for this code:
 
 {guidelines_text}
 
-Review the following code diff in the file "{file.to_file}" and take the pull request title and description into account when writing the response.
+Review the following code diff in the file "{normalized_path}" and take the pull request title and description into account when writing the response.
 
 Pull request title: {pr_details.title}
 Pull request description:
@@ -444,15 +518,9 @@ def create_comment(file: File, chunk: Chunk, ai_responses: List[Dict[str, str]])
                 debug_log(f"Warning: Line {line_number} is not an added line: {change.content}")
                 continue
             
-            # GitHub expects paths without 'a/' or 'b/' prefixes
-            path = file.to_file
+            # Normalize the file path
+            path = normalize_file_path(file.to_file)
             debug_log(f"@@@@TEST path: {path}")
-            if path.startswith('a/'):
-                path = path[2:]
-                debug_log(f"Removed a/ prefix from path: {path}")
-            elif path.startswith('b/'):
-                path = path[2:]
-                debug_log(f"Removed b/ prefix from path: {path}")
             
             comment = {
                 "body": ai_response["reviewComment"],
@@ -476,28 +544,67 @@ def analyze_code(parsed_diff: List[File], pr_details: PRDetails) -> List[Dict[st
     print("Starting analyze_code...")
     print(f"Number of files to analyze: {len(parsed_diff)}")
     comments = []
+    
+    # Get max files to process from environment variable or use a reasonable default
+    max_files = int(os.environ.get('MAX_FILES_TO_REVIEW', '10'))
+    debug_log(f"Max files to review: {max_files}")
+    
+    # Keep track of the number of API calls to avoid rate limiting
+    api_call_count = 0
+    max_api_calls = int(os.environ.get('MAX_API_CALLS', '20'))
+    debug_log(f"Max API calls allowed: {max_api_calls}")
 
-    for file in parsed_diff:
-        print(f"\nProcessing file: {file.to_file}")
+    for file_index, file in enumerate(parsed_diff):
+        # Stop processing if we've hit the max files limit
+        if file_index >= max_files:
+            debug_log(f"Reached maximum number of files to review ({max_files}). Stopping analysis.")
+            break
+            
+        # Normalize file path for consistent handling
+        normalized_path = normalize_file_path(file.to_file)
+        print(f"\nProcessing file {file_index+1}/{min(len(parsed_diff), max_files)}: {normalized_path}")
         
-        if not file.to_file or file.to_file == "/dev/null":
-            debug_log(f"Skipping file with invalid path: {file.to_file}")
+        if not normalized_path or normalized_path == "/dev/null":
+            debug_log(f"Skipping file with invalid path: {normalized_path}")
             continue
+        
+        # Check if the file has any chunks
+        if not file.chunks:
+            debug_log(f"Warning: File {normalized_path} has no chunks to analyze. Skipping.")
+            continue
+            
+        debug_log(f"File {normalized_path} has {len(file.chunks)} chunks")
             
         # Process each chunk in the file
         for chunk_index, chunk in enumerate(file.chunks):
-            debug_log(f"Processing chunk {chunk_index+1}/{len(file.chunks)}")
+            # Check if the chunk has any changes
+            if not chunk.changes:
+                debug_log(f"Warning: Chunk {chunk_index+1} in file {normalized_path} has no changes. Skipping.")
+                continue
+                
+            # Check if we've hit the API call limit
+            if api_call_count >= max_api_calls:
+                debug_log(f"Reached maximum number of API calls ({max_api_calls}). Stopping analysis.")
+                break
+                
+            debug_log(f"Processing chunk {chunk_index+1}/{len(file.chunks)} with {len(chunk.changes)} changes")
             prompt = create_prompt(file, chunk, pr_details)
             print(f"Created prompt of length {len(prompt)}")
             
             # Get AI response
             ai_responses = get_ai_response(prompt)
-            print(f"AI generated {len(ai_responses)} review comments")
+            api_call_count += 1
+            print(f"AI generated {len(ai_responses)} review comments (API call {api_call_count}/{max_api_calls})")
             
             # Create comments from AI responses
             new_comments = create_comment(file, chunk, ai_responses)
             comments.extend(new_comments)
             print(f"Added {len(new_comments)} new comments")
+        
+        # Check if we've hit the API call limit at the file level too
+        if api_call_count >= max_api_calls:
+            print(f"Reached API call limit of {max_api_calls}. Some files or chunks may not have been analyzed.")
+            break
 
     print(f"\nFinal comments list: {len(comments)} comments")
     if len(comments) > 0:
@@ -519,6 +626,19 @@ def create_review_comment(
     if not comments:
         print("WARNING: No comments to post, skipping")
         return
+    
+    # Group comments by file for better reporting
+    comments_by_file = {}
+    for comment in comments:
+        file_path = comment.get('path', 'Unknown')
+        if file_path not in comments_by_file:
+            comments_by_file[file_path] = []
+        comments_by_file[file_path].append(comment)
+    
+    # Print comment distribution
+    print("Comments distribution by file:")
+    for file_path, file_comments in comments_by_file.items():
+        print(f"  - {file_path}: {len(file_comments)} comments")
         
     try:
         # Initialize GitHub client and get repository
@@ -604,14 +724,6 @@ def create_review_comment(
                 debug_log("Using final fallback: Posting consolidated issue comment")
                 
                 # Group comments by file
-                comments_by_file = {}
-                for comment in comments:
-                    file_path = comment.get('path', 'Unknown')
-                    if file_path not in comments_by_file:
-                        comments_by_file[file_path] = []
-                    comments_by_file[file_path].append(comment)
-                
-                # Generate the comment body
                 comment_body = "# Claude Code Review Results\n\n"
                 
                 for file_path, file_comments in comments_by_file.items():
