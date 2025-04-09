@@ -13,10 +13,14 @@ inputs:
     description: 'The Claude model to use for code review'
     required: false
     default: 'claude-3-5-sonnet-20240620'
-  INPUT_EXCLUDE:
+  EXCLUDE:
     description: 'Comma-separated list of file patterns to exclude'
     required: false
     default: ''
+  DEBUG:
+    description: 'Enable debug logging'
+    required: false
+    default: 'false'
 runs:
   using: 'composite'
   steps:
@@ -38,5 +42,6 @@ runs:
         GITHUB_TOKEN: ${{ inputs.GITHUB_TOKEN }}
         ANTHROPIC_API_KEY: ${{ inputs.ANTHROPIC_API_KEY }}
         CLAUDE_MODEL: ${{ inputs.CLAUDE_MODEL }}
-        INPUT_EXCLUDE: ${{ inputs.INPUT_EXCLUDE }}
+        INPUT_EXCLUDE: ${{ inputs.EXCLUDE }}
+        DEBUG: ${{ inputs.DEBUG }}
       run: python ${{ github.action_path }}/review_code_claude.py
