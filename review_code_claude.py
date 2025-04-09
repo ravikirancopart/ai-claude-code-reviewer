@@ -507,74 +507,147 @@ def analyze_code(parsed_diff: List[File], pr_details: PRDetails) -> List[Dict[st
     
     return comments
 
-def post_comments_to_pr(
+def create_review_comment(
     owner: str,
     repo: str,
     pull_number: int,
     comments: List[Dict[str, Any]],
 ):
-    """Posts comments to the PR as a single issue comment."""
-    print(f"Posting {len(comments)} review comments to PR")
+    """Creates a pull request review with comments on specific lines."""
+    print(f"Creating PR review with {len(comments)} comments")
     
     if not comments:
         print("WARNING: No comments to post, skipping")
         return
         
     try:
+        # Initialize GitHub client and get repository
         debug_log(f"Getting repo object for {owner}/{repo}...")
         repo_obj = gh.get_repo(f"{owner}/{repo}")
         debug_log(f"Getting PR #{pull_number}...")
         pr = repo_obj.get_pull(pull_number)
         debug_log(f"Successfully retrieved PR: {pr.title}")
         
-        # Format all reviews into a single comment
-        comment_body = "# Claude Code Review Results\n\n"
+        # Format comments for the review
+        formatted_comments = []
         
-        # Group comments by file for better organization
-        comments_by_file = {}
         for comment in comments:
-            file_path = comment['path']
-            if file_path not in comments_by_file:
-                comments_by_file[file_path] = []
-            comments_by_file[file_path].append(comment)
-        
-        # Add file headings and organize comments by file
-        for file_path, file_comments in comments_by_file.items():
-            comment_body += f"## File: {file_path}\n\n"
+            path = comment.get('path')
+            line = comment.get('line')
+            body = comment.get('body')
             
-            # Sort comments by line number
-            file_comments.sort(key=lambda c: c.get('line', 0))
+            if not path or not line or not body:
+                debug_log(f"Skipping comment with missing data: path={path}, line={line}")
+                continue
+                
+            formatted_comment = {
+                'path': path,
+                'line': line,
+                'body': body
+            }
             
-            for comment in file_comments:
-                line_num = comment.get('line', 'N/A')
-                comment_body += f"### Line {line_num}\n\n"
-                comment_body += f"{comment['body']}\n\n"
-                comment_body += "---\n\n"
+            debug_log(f"Adding comment for {path}:{line}")
+            formatted_comments.append(formatted_comment)
         
-        # Create the comment
-        issue_comment = pr.create_issue_comment(comment_body)
-        print(f"Successfully created consolidated issue comment with ID: {issue_comment.id}")
-        debug_log("Successfully posted review as a single issue comment")
-        return issue_comment.id
+        if not formatted_comments:
+            print("WARNING: No valid comments to post")
+            return
+            
+        # Create the pull request review with all comments
+        review = pr.create_review(
+            body="Code review by Claude",
+            event="COMMENT",
+            comments=formatted_comments
+        )
+        
+        print(f"Successfully created PR review with ID: {review.id}")
+        return review.id
         
     except Exception as e:
-        print(f"ERROR: Failed to post review comment: {str(e)}")
-        print(f"Error type: {type(e)}")
+        print(f"ERROR: Failed to create PR review: {str(e)}")
         
-        # Try fallback method - create a simple comment
+        # Try fallback method - post comments individually
         try:
-            debug_log("Using fallback method: Creating a simple issue comment")
-            fallback_comment = pr.create_issue_comment(
-                "Claude found issues in the code but could not post detailed comments. " +
-                "Please check the action logs for details."
-            )
-            print(f"Created fallback comment with ID: {fallback_comment.id}")
-            # Still raise an exception to mark the action as failed
-            raise Exception(f"Could not create detailed comments: {str(e)}")
+            debug_log("Using fallback: Posting comments individually")
+            comment_ids = []
+            
+            for comment in comments:
+                path = comment.get('path')
+                line = comment.get('line')
+                body = comment.get('body')
+                
+                if not path or not line or not body:
+                    continue
+                    
+                try:
+                    pr_comment = pr.create_comment(
+                        body=body,
+                        path=path,
+                        line=line
+                    )
+                    comment_ids.append(pr_comment.id)
+                    debug_log(f"Created individual comment on {path}:{line}")
+                except Exception as comment_error:
+                    debug_log(f"Failed to create individual comment: {str(comment_error)}")
+            
+            if comment_ids:
+                print(f"Created {len(comment_ids)} individual comments")
+                return comment_ids
+            else:
+                raise Exception("Failed to create any individual comments")
+                
         except Exception as e2:
-            debug_log(f"Fallback method failed: {str(e2)}")
-            # Re-raise the original exception
-            raise Exception(f"All methods failed to create comments: {str(e)}")
+            debug_log(f"Individual comment fallback failed: {str(e2)}")
+            
+            # Final fallback - post a consolidated issue comment
+            try:
+                debug_log("Using final fallback: Posting consolidated issue comment")
+                
+                # Group comments by file
+                comments_by_file = {}
+                for comment in comments:
+                    file_path = comment.get('path', 'Unknown')
+                    if file_path not in comments_by_file:
+                        comments_by_file[file_path] = []
+                    comments_by_file[file_path].append(comment)
+                
+                # Generate the comment body
+                comment_body = "# Claude Code Review Results\n\n"
+                
+                for file_path, file_comments in comments_by_file.items():
+                    comment_body += f"## File: {file_path}\n\n"
+                    
+                    # Sort comments by line number
+                    file_comments.sort(key=lambda c: c.get('line', 0))
+                    
+                    for comment in file_comments:
+                        line_num = comment.get('line', 'N/A')
+                        comment_body += f"### Line {line_num}\n\n"
+                        comment_body += f"{comment.get('body', '')}\n\n"
+                        comment_body += "---\n\n"
+                
+                # Create the fallback comment
+                fallback_comment = pr.create_issue_comment(comment_body)
+                print(f"Created fallback consolidated comment with ID: {fallback_comment.id}")
+                return [fallback_comment.id]
+                
+            except Exception as e3:
+                debug_log(f"All fallback methods failed: {str(e3)}")
+                raise Exception(f"Failed to create any type of comments: {str(e)}")
+
+def post_comments_to_pr(
+    owner: str,
+    repo: str,
+    pull_number: int,
+    comments: List[Dict[str, Any]],
+):
+    """
+    DEPRECATED: This function has been replaced by create_review_comment.
+    Forwards to the new function for backward compatibility.
+    """
+    print("WARNING: Using deprecated post_comments_to_pr function")
+    print("Please update code to use create_review_comment instead")
+    return create_review_comment(owner, repo, pull_number, comments)
 
 def create_review_comment_deprecated(
     owner: str,
@@ -582,62 +655,13 @@ def create_review_comment_deprecated(
     pull_number: int,
     comments: List[Dict[str, Any]],
 ):
-    """DEPRECATED: Do not use this function as it triggers GitHub API 422 errors.
-    Use post_comments_to_pr instead, which uses issue comments."""
-    print("WARNING: Using deprecated create_review_comment function")
-    print("Please update code to use post_comments_to_pr instead")
-    
-    # Add detailed debugging to understand the 422 error
-    print("\n=== DEBUG INFORMATION FOR 422 ERRORS ===")
-    print(f"Number of comments being sent: {len(comments)}")
-    for i, comment in enumerate(comments[:5]):  # Show first 5 comments for debugging
-        print(f"\nComment {i+1} details:")
-        print(f"  Path: '{comment.get('path', 'None')}'")
-        print(f"  Position: {comment.get('position', 'None')}")
-        print(f"  Line: {comment.get('line', 'None')}")
-        print(f"  Body length: {len(comment.get('body', ''))}")
-        print(f"  Body preview: {comment.get('body', '')[:50]}...")
-    
-    # Show the complete payload that would be sent to GitHub
-    try:
-        import requests
-        import json
-        from github import GithubObject
-        
-        # Get the repository
-        gh = Github(os.environ["GITHUB_TOKEN"])
-        repo_obj = gh.get_repo(f"{owner}/{repo}")
-        pr = repo_obj.get_pull(pull_number)
-        
-        # Construct the payload manually to see what's being sent
-        payload = {
-            "body": "Review comments",
-            "event": "COMMENT",
-            "comments": []
-        }
-        
-        for comment in comments:
-            # Convert to the format that PyGithub would send
-            comment_dict = {}
-            for key, value in comment.items():
-                if value is not None and value != GithubObject.NotSet:
-                    comment_dict[key] = value
-            payload["comments"].append(comment_dict)
-        
-        print("\nFull payload that would be sent to GitHub:")
-        print(json.dumps(payload, indent=2))
-        
-        # Get the API endpoint for reference
-        api_url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{pull_number}/reviews"
-        print(f"\nAPI endpoint: {api_url}")
-        
-    except Exception as e:
-        print(f"Error constructing debug payload: {e}")
-    
-    print("=== END DEBUG INFORMATION ===\n")
-    
-    # Forward call to the correct function
-    return post_comments_to_pr(owner, repo, pull_number, comments)
+    """
+    DEPRECATED: This function has been replaced by create_review_comment.
+    Forwards to the new function for backward compatibility.
+    """
+    print("WARNING: Using deprecated create_review_comment_deprecated function")
+    print("Please update code to use create_review_comment instead")
+    return create_review_comment(owner, repo, pull_number, comments)
 
 def main():
     """Main function to execute the code review process."""
@@ -695,11 +719,11 @@ def main():
         
         if comments:
             try:
-                # Use the new post_comments_to_pr function instead of create_review_comment
-                post_id = post_comments_to_pr(
+                # Use the create_review_comment function to create a PR review
+                review_id = create_review_comment(
                     pr_details.owner, pr_details.repo, pr_details.pull_number, comments
                 )
-                print(f"Successfully posted review with ID: {post_id}")
+                print(f"Successfully posted review with ID: {review_id}")
             except Exception as e:
                 print(f"ERROR: Failed to post comments: {str(e)}")
                 sys.exit(1)  # Exit with error code
