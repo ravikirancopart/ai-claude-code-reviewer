@@ -1,6 +1,6 @@
 name: "Claude Code Reviewer"
 description: "This GitHub Action automatically reviews PRs using Anthropic's Claude 3.5 Sonnet model."
-author: 'truongnh1992'
+author: 'Tomas-Jankauskas'
 
 inputs:
   GITHUB_TOKEN:
@@ -38,5 +38,5 @@ runs:
         GITHUB_TOKEN: ${{ inputs.GITHUB_TOKEN }}
         ANTHROPIC_API_KEY: ${{ inputs.ANTHROPIC_API_KEY }}
         CLAUDE_MODEL: ${{ inputs.CLAUDE_MODEL }}
-        INPUT_EXCLUDE: ${{ inputs.EXCLUDE }}
+        INPUT_EXCLUDE: ${{ inputs.INPUT_EXCLUDE }}
       run: python ${{ github.action_path }}/review_code_claude.py
