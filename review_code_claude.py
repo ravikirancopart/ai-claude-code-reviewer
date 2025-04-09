@@ -6,6 +6,7 @@ from github import Github
 import difflib
 import requests
 import fnmatch
+import re
 from unidiff import Hunk, PatchedFile, PatchSet
 from embeddings_store import GuidelinesStore
 # from dotenv import load_dotenv // for local env only
@@ -42,7 +43,13 @@ class PRDetails:
 def get_pr_details() -> PRDetails:
     """Retrieves details of the pull request from GitHub Actions event payload."""
     event_path = os.environ.get("GITHUB_EVENT_PATH")
-    debug_log(f"Event path: {event_path}")
+    
+    # For local testing, use mock event file if GITHUB_EVENT_PATH is not set
+    if event_path is None:
+        event_path = ".github/test-data/pull_request_event.json"
+        debug_log(f"Running locally, using mock event file: {event_path}")
+    else:
+        debug_log(f"Running in GitHub Actions, event path: {event_path}")
     
     with open(event_path, "r") as f:
         event_data = json.load(f)
@@ -95,74 +102,120 @@ def get_diff(owner: str, repo: str, pull_number: int) -> str:
         print(f"URL attempted: {api_url}.diff")
         return ""
 
+class Chunk:
+    """Represents a chunk/hunk in a diff."""
+    def __init__(self):
+        self.content = ""
+        self.changes = []
+        self.source_start = 0
+        self.source_length = 0
+        self.target_start = 0
+        self.target_length = 0
 
-def analyze_code(parsed_diff: List[Dict[str, Any]], pr_details: PRDetails) -> List[Dict[str, Any]]:
-    """Analyzes the code changes using Claude and generates review comments."""
-    print("Starting analyze_code...")
-    print(f"Number of files to analyze: {len(parsed_diff)}")
-    comments = []
-    #print(f"Initial comments list: {comments}")
+class Change:
+    """Represents a single change line in a diff."""
+    def __init__(self, content="", line_number=None):
+        self.content = content
+        self.line_number = line_number  # Line number in the target file
 
-    for file_data in parsed_diff:
-        file_path = file_data.get('path', '')
-        print(f"\nProcessing file: {file_path}")
+class File:
+    """Represents a file in a diff."""
+    def __init__(self):
+        self.from_file = None
+        self.to_file = None
+        self.chunks = []
 
-        if not file_path or file_path == "/dev/null":
+def parse_diff(diff_text: str) -> List[File]:
+    """Parse a diff string into structured data."""
+    files = []
+    current_file = None
+    current_chunk = None
+    target_line_number = 0
+    
+    for line in diff_text.splitlines():
+        # Starting a new file
+        if line.startswith("diff --git"):
+            if current_file:
+                files.append(current_file)
+            current_file = File()
             continue
+            
+        if not current_file:
+            continue
+            
+        # Get file names
+        if line.startswith("--- "):
+            current_file.from_file = line[4:].strip()
+            continue
+            
+        if line.startswith("+++ "):
+            current_file.to_file = line[4:].strip()
+            continue
+            
+        # Start of a chunk/hunk
+        if line.startswith("@@"):
+            if current_chunk:
+                current_file.chunks.append(current_chunk)
+                
+            current_chunk = Chunk()
+            current_chunk.content = line
+            
+            # Parse the hunk header to get target line numbers
+            # Format: @@ -a,b +c,d @@
+            match = re.match(r'@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@', line)
+            if match:
+                target_line_number = int(match.group(1))
+                current_chunk.target_start = target_line_number
+            else:
+                target_line_number = 1  # Default if we can't parse
+                current_chunk.target_start = 1
+                
+            continue
+            
+        if current_chunk:
+            current_chunk.content += "\n" + line
+            
+            # For context lines (unchanged) and added lines, track line numbers
+            if line.startswith(" ") or line.startswith("+"):
+                change = Change(content=line, line_number=target_line_number)
+                current_chunk.changes.append(change)
+                target_line_number += 1
+            elif line.startswith("-"):
+                # For removed lines, no target line number
+                change = Change(content=line)
+                current_chunk.changes.append(change)
+    
+    # Add the last file and chunk if any
+    if current_file:
+        if current_chunk:
+            current_file.chunks.append(current_chunk)
+        files.append(current_file)
+    
+    return files
 
-        class FileInfo:
-            def __init__(self, path):
-                self.path = path
-
-        file_info = FileInfo(file_path)
-
-        hunks = file_data.get('hunks', [])
-        print(f"Hunks in file: {len(hunks)}")
-
-        for hunk_data in hunks:
-            print(f"\nHunk content: {json.dumps(hunk_data, indent=2)}")
-            hunk_lines = hunk_data.get('lines', [])
-            print(f"Number of lines in hunk: {len(hunk_lines)}")
-
-            if not hunk_lines:
-                continue
-
-            hunk = Hunk()
-            hunk.source_start = 1
-            hunk.source_length = len(hunk_lines)
-            hunk.target_start = 1
-            hunk.target_length = len(hunk_lines)
-            hunk.content = '\n'.join(hunk_lines)
-
-            prompt = create_prompt(file_info, hunk, pr_details)
-            print("Sending prompt to Claude...")
-            ai_response = get_ai_response(prompt)
-            print(f"AI response received: {ai_response}")
-
-            if ai_response:
-                new_comments = create_comment(file_info, hunk, ai_response)
-                print(f"Comments created from AI response: {new_comments}")
-                if new_comments:
-                    comments.extend(new_comments)
-                    print(f"Updated comments list: {comments}")
-
-    print(f"\nFinal comments list: {comments}")
-    return comments
-
-
-def create_prompt(file: PatchedFile, hunk: Hunk, pr_details: PRDetails) -> str:
-    """Creates the prompt for the Claude model."""
+def create_prompt(file: File, chunk: Chunk, pr_details: PRDetails) -> str:
+    """Creates a prompt for Claude to review the code."""
     # Get relevant guidelines based on the code being reviewed
     relevant_guidelines = guidelines_store.get_relevant_guidelines(
-        code_snippet=hunk.content,
-        file_path=file.path
+        code_snippet=chunk.content,
+        file_path=file.to_file
     )
     
     guidelines_text = "\n".join(relevant_guidelines)
     
+    # Map the changes to a format that includes line numbers for easier review
+    formatted_changes = []
+    for change in chunk.changes:
+        line_prefix = f"{change.line_number} " if change.line_number else ""
+        formatted_changes.append(f"{line_prefix}{change.content}")
+    
+    formatted_chunk = "\n".join(formatted_changes)
+    
     return f"""Your task is reviewing pull requests according to our coding guidelines. Instructions:
     - Provide the response in following JSON format: {{"reviews": [{{"lineNumber": <line_number>, "reviewComment": "<review comment>"}}]}}
-    - Provide comments and suggestions ONLY if there is something to improve, otherwise "reviews" should be an empty array
+    - The lineNumber should reference the line numbers shown at the beginning of each line in the diff
+    - Only comment on the lines that start with '+' in the diff (added lines)
+    - Only provide comments if there is something to improve
     - Use GitHub Markdown in comments
     - Focus on bugs, security issues, performance problems, and adherence to our coding guidelines
     - IMPORTANT: NEVER suggest adding comments to the code
@@ -171,7 +224,7 @@ Here are the relevant coding guidelines for this code:
 
 {guidelines_text}
 
-Review the following code diff in the file "{file.path}" and take the pull request title and description into account when writing the response.
+Review the following code diff in the file "{file.to_file}" and take the pull request title and description into account when writing the response.
 
 Pull request title: {pr_details.title}
 Pull request description:
@@ -180,10 +233,10 @@ Pull request description:
 {pr_details.description or 'No description provided'}
 ---
 
-Git diff to review:
+Git diff to review (format: line_number content):
 
 ```diff
-{hunk.content}
+{formatted_chunk}
 ```
 """
 
@@ -240,38 +293,76 @@ def get_ai_response(prompt: str) -> List[Dict[str, str]]:
         print(f"Error during Claude API call: {e}")
         return []
 
-class FileInfo:
-    """Simple class to hold file information."""
-    def __init__(self, path: str):
-        self.path = path
-
-def create_comment(file: FileInfo, hunk: Hunk, ai_responses: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+def create_comment(file: File, chunk: Chunk, ai_responses: List[Dict[str, str]]) -> List[Dict[str, Any]]:
     """Creates comment objects from AI responses."""
-    print("AI responses in create_comment:", ai_responses)
-    print(f"Hunk details - start: {hunk.source_start}, length: {hunk.source_length}")
-    print(f"Hunk content:\n{hunk.content}")
-
     comments = []
+    
+    # Create a lookup of line numbers to changes
+    line_map = {}
+    for change in chunk.changes:
+        if change.line_number is not None:
+            line_map[change.line_number] = change.content
+    
+    # Debug info for line map
+    if DEBUG:
+        debug_log("\nLine map:")
+        for line_num, content in sorted(line_map.items()):
+            debug_log(f"Line {line_num}: {content}")
+    
     for ai_response in ai_responses:
         try:
             line_number = int(ai_response["lineNumber"])
-            print(f"Original AI suggested line: {line_number}")
-
-            # Ensure the line number is within the hunk's range
-            if line_number < 1 or line_number > hunk.source_length:
-                print(f"Warning: Line number {line_number} is outside hunk range")
+            
+            # Check if the line is in our map
+            if line_number not in line_map:
+                debug_log(f"Warning: Line {line_number} not found in the diff")
                 continue
-
+                
+            # Ensure the line is an added line (starts with +)
+            content = line_map[line_number]
+            if not content.startswith("+"):
+                debug_log(f"Warning: Line {line_number} is not an added line: {content}")
+                continue
+            
             comment = {
                 "body": ai_response["reviewComment"],
-                "path": file.path,
+                "path": file.to_file,
                 "position": line_number
             }
-            print(f"Created comment: {json.dumps(comment, indent=2)}")
             comments.append(comment)
 
         except (KeyError, TypeError, ValueError) as e:
-            print(f"Error creating comment from AI response: {e}, Response: {ai_response}")
+            debug_log(f"Error creating comment from AI response: {e}, Response: {ai_response}")
+    
+    return comments
+
+def analyze_code(parsed_diff: List[File], pr_details: PRDetails) -> List[Dict[str, Any]]:
+    """Analyzes the code changes using Claude and generates review comments."""
+    print("Starting analyze_code...")
+    print(f"Number of files to analyze: {len(parsed_diff)}")
+    comments = []
+
+    for file in parsed_diff:
+        print(f"\nProcessing file: {file.to_file}")
+        
+        if not file.to_file or file.to_file == "/dev/null":
+            continue
+            
+        # Process each chunk in the file
+        for chunk in file.chunks:
+            prompt = create_prompt(file, chunk, pr_details)
+            print(f"Created prompt of length {len(prompt)}")
+            
+            # Get AI response
+            ai_responses = get_ai_response(prompt)
+            print(f"AI generated {len(ai_responses)} review comments")
+            
+            # Create comments from AI responses
+            new_comments = create_comment(file, chunk, ai_responses)
+            comments.extend(new_comments)
+            print(f"Added {len(new_comments)} new comments")
+
+    print(f"\nFinal comments list: {comments}")
     return comments
 
 def create_review_comment(
@@ -300,41 +391,6 @@ def create_review_comment(
         print(f"Error type: {type(e)}")
         print(f"Review payload: {comments}")
 
-def parse_diff(diff_str: str) -> List[Dict[str, Any]]:
-    """Parses the diff string and returns a structured format."""
-    files = []
-    current_file = None
-    current_hunk = None
-
-    for line in diff_str.splitlines():
-        if line.startswith('diff --git'):
-            if current_file:
-                files.append(current_file)
-            current_file = {'path': '', 'hunks': []}
-
-        elif line.startswith('--- a/'):
-            if current_file:
-                current_file['path'] = line[6:]
-
-        elif line.startswith('+++ b/'):
-            if current_file:
-                current_file['path'] = line[6:]
-
-        elif line.startswith('@@'):
-            if current_file:
-                current_hunk = {'header': line, 'lines': []}
-                current_file['hunks'].append(current_hunk)
-
-        elif current_hunk is not None:
-            current_hunk['lines'].append(line)
-
-    if current_file:
-        files.append(current_file)
-
-    return files
-
-
-
 def main():
     """Main function to execute the code review process."""
     try:
@@ -343,6 +399,7 @@ def main():
         debug_log(f"Got PR details: {pr_details.__dict__}")
 
         diff = get_diff(pr_details.owner, pr_details.repo, pr_details.pull_number)
+        
         debug_log(f"Got diff of length: {len(diff)}")
         
         if not diff:
@@ -364,7 +421,7 @@ def main():
         # Filter files
         filtered_diff = []
         for file in parsed_diff:
-            file_path = file.get('path', '')
+            file_path = file.to_file
             should_exclude = any(fnmatch.fnmatch(file_path, pattern) for pattern in exclude_patterns)
             if should_exclude:
                 debug_log(f"Excluding file: {file_path}")
@@ -372,7 +429,7 @@ def main():
             filtered_diff.append(file)
             debug_log(f"Including file: {file_path}")
 
-        debug_log(f"Files to analyze after filtering: {[f.get('path', '') for f in filtered_diff]}")
+        debug_log(f"Files to analyze after filtering: {[f.to_file for f in filtered_diff]}")
         
         comments = analyze_code(filtered_diff, pr_details)
         debug_log(f"Generated {len(comments)} comments")
