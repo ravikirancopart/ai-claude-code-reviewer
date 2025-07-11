@@ -87,8 +87,8 @@ def get_pr_details() -> PRDetails:
         debug_log(f"Event data: {json.dumps(event_data, indent=2)}")
 
         # Handle PR labeled event
-        if "pull_request" in event_data:
-            pull_number = event_data["pull_request"]["number"]
+        if "issue" in event_data and "pull_request" in event_data["issue"]:
+            pull_number = event_data["issue"]["number"]
             repo_full_name = event_data["repository"]["full_name"]
         else:
             print("ERROR: Unsupported event type, requires pull_request data")
