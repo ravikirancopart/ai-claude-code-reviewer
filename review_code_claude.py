@@ -23,8 +23,8 @@ DEBUG = os.environ.get('DEBUG', 'true').lower() == 'true'
 guidelines_store = None
 
 def debug_log(message):
-    if DEBUG:
-        print(f"DEBUG: {message}")
+    # if DEBUG:
+    print(f"DEBUG: {message}")
 
 # Add detailed environment variable checks
 try:
