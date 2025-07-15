@@ -818,6 +818,7 @@ def main():
                 debug_log("Initializing guidelines store...")
                 global guidelines_store
                 guidelines_store = GuidelinesStore()
+                debug_log("Check guidelines store initialized...")
                 guidelines_store.initialize_from_markdown('coding_guidelines.md')
                 debug_log("Guidelines store initialized successfully")
             except Exception as e:
