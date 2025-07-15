@@ -40,8 +40,8 @@ class GuidelinesManager:
         
     def guidelines_exist(self) -> bool:
         """Check if the coding guidelines file exists."""
-        return true
-        #return os.path.exists(GUIDELINES_FILE)
+        return True
+        return os.path.exists(GUIDELINES_FILE)
     
     def _extract_timestamp_from_file(self) -> Optional[datetime]:
         """
