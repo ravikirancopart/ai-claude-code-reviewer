@@ -122,7 +122,7 @@ def retrieve_guidelines(file_path: str="default", query: str = "How to review th
     debug_log(f"🧠 Filtered to {len(filtered)} docs with topic: {topic}")
 
     if not filtered:
-        print("⚠️ No exact topic match found. Returning top 3 general docs.")
+        print("⚠️ No exact topic match found. Returning top 3 general docs")
         return [doc.page_content for doc in docs[:3]]
 
     return filtered[:5]
