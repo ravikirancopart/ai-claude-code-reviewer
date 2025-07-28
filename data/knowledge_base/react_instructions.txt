@@ -1,0 +1,42 @@
+// [topic=react]
+- Use functional components with React Hooks.
+- Avoid inline functions in JSX; define them outside or memoize.
+- Always use `key` prop with unique identifiers in list rendering.
+- Prefer lifting state up over prop drilling.
+- Use `useEffect` cleanup to prevent memory leaks.
+
+
+// [topic=javascript]
+- Prefer `const` and `let` over `var`.
+- Use `===` instead of `==` for comparisons.
+- Avoid deeply nested callbacks; use async/await or Promises.
+- Use optional chaining (`?.`) and nullish coalescing (`??`) where appropriate.
+- Avoid mutating objects/arrays directly; use spread operator or methods like `map`, `filter`.
+
+
+// [topic=redux]
+- Keep reducers pure — no side effects inside.
+- Use Redux Toolkit to simplify action/reducer creation.
+- Normalize state shape to avoid deeply nested objects.
+- Prefer `createSlice` and `createAsyncThunk` for cleaner logic.
+
+
+// [topic=xstate]
+- Use clearly defined states and transitions.
+- Keep state machine config simple and readable.
+- Use context to hold extended state (data).
+- Visualize your machines during dev with `@xstate/inspect`.
+
+
+// [topic=html]
+- Always use semantic tags (`<main>`, `<section>`, `<article>`, etc.).
+- Add `alt` tags to all images.
+- Ensure forms have proper labels and accessibility support.
+- Use `aria-*` attributes for better screen reader compatibility.
+
+
+// [topic=css]
+- Prefer utility-first or modular CSS to avoid conflicts.
+- Avoid deep nesting in SCSS/SASS.
+- Use CSS variables for theme consistency.
+- Minimize use of `!important`; refactor when possible.

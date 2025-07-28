@@ -1,0 +1,40 @@
+// [topic=java]
+- Avoid using raw types in collections.
+- Prefer Optional over returning null from methods.
+- Use try-with-resources for managing streams or connections.
+- Avoid deeply nested code blocks or if-else chains.
+
+// [topic=springboot]
+- Use constructor-based injection instead of field injection.
+- Use `@ConfigurationProperties` instead of hardcoded config.
+- Use `ResponseEntity` for REST responses with proper status codes.
+- Avoid placing business logic inside controllers.
+
+// [topic=kafka]
+- Configure retry and dead-letter handling for Kafka consumers.
+- Handle deserialization errors gracefully.
+- Avoid blocking the Kafka listener thread; delegate processing.
+- Ensure idempotent message handling.
+
+// [topic=webclient]
+- Set timeouts on WebClient to prevent hanging.
+- Avoid `.block()` unless in non-reactive context.
+- Use `retryWhen` for retry logic.
+- Handle `WebClientResponseException` specifically.
+
+// [topic=spring_statemachine]
+- Use enums for states/events.
+- Keep transitions minimal and well-structured.
+- Log transitions using listeners.
+- Trigger events via `stateMachine.sendEvent(...)` only.
+
+// [topic=modelmapper]
+- Use matching DTO field names to avoid custom mappings.
+- Register custom converters when needed.
+- Avoid ModelMapper in performance-critical code paths.
+
+// [topic=hibernate]
+- Use LAZY fetching by default to avoid N+1 problems.
+- Paginate large queries to save memory.
+- Don’t expose entity objects in REST directly.
+- Annotate service methods with `@Transactional` where needed.

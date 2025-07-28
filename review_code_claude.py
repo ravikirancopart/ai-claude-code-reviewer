@@ -8,9 +8,7 @@ import difflib
 import requests
 import fnmatch
 import re
-from unidiff import Hunk, PatchedFile, PatchSet
-from embeddings_store import GuidelinesStore
-from guidelines_manager import GuidelinesManager
+from vectorstore_utils import ensure_vectorstore_exists_and_get
 # from dotenv import load_dotenv // for local env only
 
 # Load environment variables from .env file
@@ -366,7 +364,7 @@ def create_prompt(file: File, chunk: Chunk, pr_details: PRDetails) -> str:
         guidelines_text = ""
         if guidelines_store is not None:
             debug_log(f"Getting relevant guidelines for {normalized_path}...")
-            relevant_guidelines = guidelines_store.get_relevant_guidelines(
+            relevant_guidelines = guidelines_store.get_relevant_instructions(
                 code_snippet=chunk.content,
                 file_path=normalized_path
             )
@@ -787,49 +785,9 @@ def main():
         debug_log(f"Python version: {sys.version}")
         debug_log(f"Current directory: {os.getcwd()}")
         debug_log(f"Environment variables: {[k for k in os.environ.keys() if not k.startswith('_')]}")
-        
-        # First, check and update guidelines if needed
-        guidelines_manager = GuidelinesManager()
-        guidelines_exist = guidelines_manager.guidelines_exist()
 
-        # If guidelines don't exist, try to fetch from Confluence
-        if not guidelines_exist:
-            debug_log("No guidelines file found, attempting to fetch from Confluence...")
-            guidelines_updated = guidelines_manager.update_guidelines()
-            if guidelines_updated:
-                debug_log("Successfully fetched guidelines from Confluence")
-                guidelines_exist = True
-            else:
-                debug_log("Failed to fetch guidelines from Confluence")
-        else:
-            # Guidelines exist, check if they need updating based on timestamp
-            if guidelines_manager.needs_refresh():
-                debug_log(f"Guidelines are older than {guidelines_manager.refresh_interval_days} days, attempting to update...")
-                guidelines_updated = guidelines_manager.update_guidelines()
-                if guidelines_updated:
-                    debug_log("Successfully refreshed guidelines from Confluence")
-                else:
-                    debug_log("Failed to refresh guidelines, will use existing file")
-        
-        # Initialize guidelines store - only if guidelines exist
-        has_guidelines = guidelines_manager.guidelines_exist()
-        if has_guidelines:
-            try:
-                debug_log("Initializing guidelines store...")
-                global guidelines_store
-                guidelines_store = GuidelinesStore()
-                debug_log("Check guidelines store initialized...")
-                guidelines_store.initialize_from_markdown('coding_guidelines.md')
-                debug_log("Guidelines store initialized successfully")
-            except Exception as e:
-                debug_log(f"Failed to initialize guidelines store: {str(e)}")
-                debug_log("Continuing without guidelines context")
-                has_guidelines = False
-        else:
-            debug_log("No guidelines file exists. Continuing without guidelines context")
-            # Ensure guidelines_store is None
-            guidelines_store = None
-        
+        guidelines_store = ensure_vectorstore_exists_and_get()
+
         pr_details = get_pr_details()
         debug_log(f"Got PR details: {pr_details.__dict__}")
 
